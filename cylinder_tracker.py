@@ -5,6 +5,8 @@ import numpy as np
 def color_cali(cali_sqare, hsv):
     x1, y1 = cali_sqare[0]
     x2, y2 = cali_sqare[1]
+    sat_lower, sat_upper = cali_sqare[2]
+    val_lower, val_upper = cali_sqare[3]
 
     roi_hue = hsv[y1:y2, x1:x2, 0]
     hue_mean = int(np.round(roi_hue.mean()))
@@ -12,8 +14,8 @@ def color_cali(cali_sqare, hsv):
     hsv_pixel = np.uint8([[[hue_mean, 255, 255]]])
     color_bgr = tuple(int(v) for v in cv2.cvtColor(hsv_pixel, cv2.COLOR_HSV2BGR)[0, 0])
 
-    lower = np.array([hue_mean-threshold,  30, 160], dtype=np.uint8)
-    upper = np.array([hue_mean+threshold, 100,   255], dtype=np.uint8)
+    lower = np.array([hue_mean-threshold,  sat_lower, sat_upper], dtype=np.uint8)
+    upper = np.array([hue_mean+threshold, val_lower,   val_upper], dtype=np.uint8)
 
     return (lower, upper, color_bgr)
 
@@ -48,8 +50,8 @@ if not cap.isOpened():
     exit()
 
 
-cali_sqare_1 =[(810,535),(835,548)] #[start, end] postion
-cali_sqare_2 =[(835,535),(860,548)]
+cali_sqare_1 =[(810,535),(835,548),(30,100), (160, 255)] #[start postion, end postion, saturation bound, value bound]
+cali_sqare_2 =[(835,535),(860,548),(30,100), (160, 255)] 
 first_frame = 0
 threshold = 20
 while True:
