@@ -52,7 +52,7 @@ def pixel_to_Cam_Space(
     mat_height_in=24,
 ):
     """
-    Map a pixel position in the *homography-warped* image to X/Y in inches from origin marker.
+    Map a pixel position in the homography-warped image to X/Y in inches from origin marker.
 
     +X is defined by axis_p1_source -> axis_p2_source (in SOURCE image), after homography.
     """
@@ -65,7 +65,7 @@ def pixel_to_Cam_Space(
     v_x = (p2_w - p1_w)
     len_x_px = float(np.linalg.norm(v_x))
     if len_x_px < 1e-9:
-        raise ValueError("Axis points are too close after homography; cannot define +X axis.")
+        raise ValueError("Axis points are too close after homography. Cannot define x axis.")
     ex = v_x / len_x_px
 
     # Perpendicular in image coords (+u right, +v down)
@@ -213,7 +213,7 @@ frame_count = 0
 frame_window = cv2.namedWindow('frame')
 undist_window = cv2.namedWindow('undistorted frame')
 
-last_pink_sled_location = origin_pix
+last_pink_sled_location = origin_pix # Initially, if sleds are not found, return origin pixel values
 last_red_sled_location = origin_pix
 while True:
     ret, frame = cap.read()
@@ -221,13 +221,17 @@ while True:
         break 
     
     if first_frame == 0:
+        # run color calibration on first frame
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         lower_pink, upper_pink, color_bgr_pink = color_cali(cali_sqare_1, hsv)
         lower_red, upper_red, color_bgr_red = color_cali(cali_sqare_2, hsv)
         first_frame = 1
+
     draw_frame = frame.copy() 
+    # draw bounding boxes around sleds
     draw_frame, pink_sled_location = draw_rectan_tracker(frame, draw_frame, lower_pink, upper_pink, color_bgr_pink)
-    draw_frame, red_sled_location= draw_rectan_tracker(frame, draw_frame, lower_red, upper_red, color_bgr_red)
+    draw_frame, red_sled_location = draw_rectan_tracker(frame, draw_frame, lower_red, upper_red, color_bgr_red)
+    # if sled was not found, record last known location
     if pink_sled_location:
         last_pink_sled_location = pink_sled_location
     else:
@@ -243,6 +247,7 @@ while True:
     red_loc_pix_x = red_sled_location[0]
     red_loc_pix_y = red_sled_location[1]
 
+    # Determine the real space in pixels
     pink_loc_real = pixel_source_to_world_xy_in((pink_loc_pix_x, pink_loc_pix_y), homography, origin_pix, bottom_left, bottom_right)
     red_loc_real = pixel_source_to_world_xy_in((red_loc_pix_x, red_loc_pix_y), homography, origin_pix ,bottom_left, bottom_right)
     new_row = pd.DataFrame({"Frame number": [frame_count], 
@@ -254,7 +259,6 @@ while True:
     # Concatenate the original DataFrame and the new row DataFrame
     record = pd.concat([record, new_row], ignore_index=True)
 
-    # determine real position
     frame_w_origin = frame.copy()
     cv2.drawMarker(frame_w_origin, 
                 (int(origin_pix[0]), int(origin_pix[1])), 
@@ -276,6 +280,7 @@ while True:
 cap.release()
 cv2.destroyAllWindows()
 
+# plot real positions from dataframe
 if not record.empty:
     plot_time = pd.to_numeric(record['Time'], errors='coerce')
 
