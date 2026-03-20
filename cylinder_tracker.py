@@ -1,6 +1,7 @@
 import cv2 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 # ------------ Helper Functions -------
 def color_cali(cali_sqare, hsv):
@@ -47,8 +48,8 @@ def pixel_to_Cam_Space(
     origin_uv_source,
     axis_p1_source,
     axis_p2_source,
-    mat_width_in=36,
-    mat_height_in=36,
+    mat_width_in=24,
+    mat_height_in=24,
 ):
     """
     Map a pixel position in the *homography-warped* image to X/Y in inches from origin marker.
@@ -98,8 +99,8 @@ def pixel_source_to_world_xy_in(
     origin_uv_source,
     axis_p1_source,
     axis_p2_source,
-    mat_width_in=36,
-    mat_height_in=36,
+    mat_width_in=24,
+    mat_height_in=24,
 ):
     """
     (source pixel) -> (warped pixel) -> (x,y) meters from origin
@@ -111,8 +112,6 @@ def pixel_source_to_world_xy_in(
         origin_uv_source=origin_uv_source,
         axis_p1_source=axis_p1_source,
         axis_p2_source=axis_p2_source
-        # mat_width_in=mat_width_in,
-        # mat_height_in=mat_height_in,
     )
 
 # ------------ Configurables and Constants
@@ -213,6 +212,9 @@ if not cap.isOpened():
 frame_count = 0
 frame_window = cv2.namedWindow('frame')
 undist_window = cv2.namedWindow('undistorted frame')
+
+last_pink_sled_location = origin_pix
+last_red_sled_location = origin_pix
 while True:
     ret, frame = cap.read()
     if not ret:
@@ -226,23 +228,25 @@ while True:
     draw_frame = frame.copy() 
     draw_frame, pink_sled_location = draw_rectan_tracker(frame, draw_frame, lower_pink, upper_pink, color_bgr_pink)
     draw_frame, red_sled_location= draw_rectan_tracker(frame, draw_frame, lower_red, upper_red, color_bgr_red)
-
     if pink_sled_location:
-        pink_loc_pix_x = pink_sled_location[0]
-        pink_loc_pix_y = pink_sled_location[1]
+        last_pink_sled_location = pink_sled_location
     else:
-        pink_loc_pix_x = origin_pix[0]
-        pink_loc_pix_y = origin_pix[1]
+        pink_sled_location = last_pink_sled_location
+
     if red_sled_location:
-        red_loc_pix_x = red_sled_location[0]
-        red_loc_pix_y = red_sled_location[1]
+        last_red_sled_location = red_sled_location
     else:
-        red_loc_pix_x = origin_pix[0]
-        red_loc_pix_y = origin_pix[1]
+        red_sled_location = last_red_sled_location
+
+    pink_loc_pix_x = pink_sled_location[0]
+    pink_loc_pix_y = pink_sled_location[1]
+    red_loc_pix_x = red_sled_location[0]
+    red_loc_pix_y = red_sled_location[1]
+
     pink_loc_real = pixel_source_to_world_xy_in((pink_loc_pix_x, pink_loc_pix_y), homography, origin_pix, bottom_left, bottom_right)
     red_loc_real = pixel_source_to_world_xy_in((red_loc_pix_x, red_loc_pix_y), homography, origin_pix ,bottom_left, bottom_right)
     new_row = pd.DataFrame({"Frame number": [frame_count], 
-                            "Time": [frame_count/60], 
+                            "Time": [frame_count/30], 
                             "Pink Sled Pixel Location": [pink_sled_location], 
                             "Red Sled Pixel Location": [red_sled_location], 
                             "Pink Sled Real Location": [pink_loc_real], 
@@ -269,16 +273,57 @@ while True:
     if cv2.waitKey(25) & 0xFF == ord('q'):
         break
 
-
-
 cap.release()
 cv2.destroyAllWindows()
 
-# # iterate through data frame
-# cap = cv2.VideoCapture(video_path) # reinitialize video capture so tracking starts at beginning
-# frame_count = 0
-# for index, row in record.iterrows():
-#     pink_loc_pix_x, pink_loc_pix_y = row['Pink Sled Pixel Location']
-#     red_loc_pix_x, red_loc_pix_y = row['Red Sled Pixel Location']
-#     pink_loc_real = pixel_source_to_world_xy_in(pink_loc_pix_x, pink_loc_pix_y, homography)
-#     red_loc_real = pixel_source_to_world_xy_in(red_loc_pix_x, red_loc_pix_y, homography)
+if not record.empty:
+    plot_time = pd.to_numeric(record['Time'], errors='coerce')
+
+    def _split_xy(series):
+        x_vals = []
+        y_vals = []
+        for value in series:
+            if isinstance(value, (tuple, list, np.ndarray)) and len(value) >= 2:
+                x_vals.append(float(value[0]))
+                y_vals.append(float(value[1]))
+            else:
+                x_vals.append(np.nan)
+                y_vals.append(np.nan)
+        return np.array(x_vals, dtype=float), np.array(y_vals, dtype=float)
+
+    pink_x, pink_y = _split_xy(record['Pink Sled Real Location'])
+    red_x, red_y = _split_xy(record['Red Sled Real Location'])
+
+    plt.figure()
+    plt.plot(plot_time, pink_x)
+    plt.xlabel('Time (s)')
+    plt.ylabel('Pink sled X position (inches)')
+    plt.title('Pink sled X position vs time')
+    plt.grid(True)
+    plt.tight_layout()
+
+    plt.figure()
+    plt.plot(plot_time, pink_y)
+    plt.xlabel('Time (s)')
+    plt.ylabel('Pink sled Y position (inches)')
+    plt.title('Pink sled Y position vs time')
+    plt.grid(True)
+    plt.tight_layout()
+
+    plt.figure()
+    plt.plot(plot_time, red_x)
+    plt.xlabel('Time (s)')
+    plt.ylabel('Red sled X position (inches)')
+    plt.title('Red sled X position vs time')
+    plt.grid(True)
+    plt.tight_layout()
+
+    plt.figure()
+    plt.plot(plot_time, red_y)
+    plt.xlabel('Time (s)')
+    plt.ylabel('Red sled Y position (inches)')
+    plt.title('Red sled Y position vs time')
+    plt.grid(True)
+    plt.tight_layout()
+
+    plt.show()
