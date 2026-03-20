@@ -41,9 +41,79 @@ def draw_rectan_tracker(frame, draw_frame, lower, upper, color):
         break # only one sled exists in each frame
     return draw_frame, location
 
+def pixel_to_Cam_Space(
+    uv_undistorted,
+    H,
+    origin_uv_source,
+    axis_p1_source,
+    axis_p2_source,
+    mat_width_in=36,
+    mat_height_in=36,
+):
+    """
+    Map a pixel position in the *homography-warped* image to X/Y in inches from origin marker.
 
+    +X is defined by axis_p1_source -> axis_p2_source (in SOURCE image), after homography.
+    """
+    H = np.asarray(H, dtype=np.float64)
 
+    origin_w = apply_homography_to_point(H, origin_uv_source)
+    p1_w = apply_homography_to_point(H, axis_p1_source)
+    p2_w = apply_homography_to_point(H, axis_p2_source)
 
+    v_x = (p2_w - p1_w)
+    len_x_px = float(np.linalg.norm(v_x))
+    if len_x_px < 1e-9:
+        raise ValueError("Axis points are too close after homography; cannot define +X axis.")
+    ex = v_x / len_x_px
+
+    # Perpendicular in image coords (+u right, +v down)
+    ey = np.array([ex[1], -ex[0]], dtype=np.float64)
+
+    p_w = np.array([float(uv_undistorted[0]), float(uv_undistorted[1])], dtype=np.float64)
+    d = p_w - origin_w
+    dx_px = float(d.dot(ex))
+    dy_px = float(d.dot(ey))
+
+    # Scale (inches per pixel)
+    m_per_px_x = float(mat_width_in) / len_x_px
+    len_y_px = len_x_px * (float(mat_height_in) / float(mat_width_in))
+    m_per_px_y = float(mat_height_in) / len_y_px
+
+    x_m = dx_px * m_per_px_x
+    y_m = dy_px * m_per_px_y
+    return float(x_m), float(y_m)
+
+def apply_homography_to_point(H, uv):
+    u, v = float(uv[0]), float(uv[1])
+    p = np.array([u, v, 1.0], dtype=np.float64)
+    q = H @ p
+    if abs(q[2]) < 1e-12:
+        raise ValueError("Homography produced point at infinity (w ~ 0).")
+    return np.array([q[0] / q[2], q[1] / q[2]], dtype=np.float64)
+
+def pixel_source_to_world_xy_in(
+    uv_source,
+    H,
+    origin_uv_source,
+    axis_p1_source,
+    axis_p2_source,
+    mat_width_in=36,
+    mat_height_in=36,
+):
+    """
+    (source pixel) -> (warped pixel) -> (x,y) meters from origin
+    """
+    uv_warped = apply_homography_to_point(H, uv_source)
+    return pixel_to_Cam_Space(
+        uv_undistorted=uv_warped,
+        H=H,
+        origin_uv_source=origin_uv_source,
+        axis_p1_source=axis_p1_source,
+        axis_p2_source=axis_p2_source
+        # mat_width_in=mat_width_in,
+        # mat_height_in=mat_height_in,
+    )
 
 # ------------ Configurables and Constants
 cali_sqare_1 =[(810,535),(835,545), 17,(30,100), (160, 255)] #[start postion, end postion,hue threshold,  saturation bound, value bound]
@@ -53,6 +123,7 @@ board_size = (5, 5)   # 6x6 squares -> 5x5 inner corners
 outermost_board_corners = None
 board_found = False
 video_path = 'videos/test3_5_5.h264'
+FPS = 30 # camera framerate
 
 
 # ------------ Main  -------
@@ -100,8 +171,9 @@ point_1 = np.array(bottom_left)
 point_2 = np.array(top_left)
 point_3 = np.array(top_right)
 point_4 = np.array(bottom_right)
-origin = point_1
-print(point_1)
+# select origin to measure from
+origin_pix = bottom_left
+print("pixel origin: ", origin_pix)
 mat_aspect_ratio = 1
 # calculate destination points for homography (normal view of the mat)
 v1 = point_2 - point_1
@@ -121,18 +193,31 @@ cv2.imshow("Projected Top-Down View", undistorted)
 cv2.waitKey(0)
 
 
+origin_real_space = pixel_source_to_world_xy_in(origin_pix, homography, origin_pix, bottom_left, bottom_right, homography)
+print("REAL ORIGIN: ", origin_real_space)
+
 cap = cv2.VideoCapture(video_path) # reinitialize video capture so tracking starts at beginning
 first_frame = 0
+record = pd.DataFrame(columns=['Frame number', 
+                                    'Time', 
+                                    'Pink Sled Pixel Location', 
+                                    'Red Sled Pixel Location',
+                                    'Pink Sled Real Location', 
+                                    'Red Sled Real Location'])
+
 
 if not cap.isOpened():
     print("Error opening video file")
     exit()
 
+frame_count = 0
+frame_window = cv2.namedWindow('frame')
+undist_window = cv2.namedWindow('undistorted frame')
 while True:
     ret, frame = cap.read()
     if not ret:
         break 
-
+    
     if first_frame == 0:
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         lower_pink, upper_pink, color_bgr_pink = color_cali(cali_sqare_1, hsv)
@@ -142,10 +227,58 @@ while True:
     draw_frame, pink_sled_location = draw_rectan_tracker(frame, draw_frame, lower_pink, upper_pink, color_bgr_pink)
     draw_frame, red_sled_location= draw_rectan_tracker(frame, draw_frame, lower_red, upper_red, color_bgr_red)
 
-    cv2.imshow('frame', draw_frame)
+    if pink_sled_location:
+        pink_loc_pix_x = pink_sled_location[0]
+        pink_loc_pix_y = pink_sled_location[1]
+    else:
+        pink_loc_pix_x = origin_pix[0]
+        pink_loc_pix_y = origin_pix[1]
+    if red_sled_location:
+        red_loc_pix_x = red_sled_location[0]
+        red_loc_pix_y = red_sled_location[1]
+    else:
+        red_loc_pix_x = origin_pix[0]
+        red_loc_pix_y = origin_pix[1]
+    pink_loc_real = pixel_source_to_world_xy_in((pink_loc_pix_x, pink_loc_pix_y), homography, origin_pix, bottom_left, bottom_right)
+    red_loc_real = pixel_source_to_world_xy_in((red_loc_pix_x, red_loc_pix_y), homography, origin_pix ,bottom_left, bottom_right)
+    new_row = pd.DataFrame({"Frame number": [frame_count], 
+                            "Time": [frame_count/60], 
+                            "Pink Sled Pixel Location": [pink_sled_location], 
+                            "Red Sled Pixel Location": [red_sled_location], 
+                            "Pink Sled Real Location": [pink_loc_real], 
+                            "Red Sled Real Location": [red_loc_real]})
+    # Concatenate the original DataFrame and the new row DataFrame
+    record = pd.concat([record, new_row], ignore_index=True)
 
+    # determine real position
+    frame_w_origin = frame.copy()
+    cv2.drawMarker(frame_w_origin, 
+                (int(origin_pix[0]), int(origin_pix[1])), 
+                (0, 0, 255), 
+               markerType=cv2.MARKER_STAR, 
+               markerSize=10, 
+               thickness=2)
+    draw_undist_frame = cv2.warpPerspective(frame_w_origin, homography, (1300,700))
+    cv2.putText(draw_undist_frame, f"pink location={pink_loc_real}", (30, 60),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+    cv2.putText(draw_undist_frame, f"red location={red_loc_real}", (30, 200),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+    cv2.imshow('frame', draw_frame)
+    cv2.imshow('undistorted frame', draw_undist_frame)
+    frame_count += 1
     if cv2.waitKey(25) & 0xFF == ord('q'):
         break
 
+
+
 cap.release()
 cv2.destroyAllWindows()
+
+# # iterate through data frame
+# cap = cv2.VideoCapture(video_path) # reinitialize video capture so tracking starts at beginning
+# frame_count = 0
+# for index, row in record.iterrows():
+#     pink_loc_pix_x, pink_loc_pix_y = row['Pink Sled Pixel Location']
+#     red_loc_pix_x, red_loc_pix_y = row['Red Sled Pixel Location']
+#     pink_loc_real = pixel_source_to_world_xy_in(pink_loc_pix_x, pink_loc_pix_y, homography)
+#     red_loc_real = pixel_source_to_world_xy_in(red_loc_pix_x, red_loc_pix_y, homography)
