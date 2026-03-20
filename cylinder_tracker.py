@@ -25,7 +25,7 @@ def draw_rectan_tracker(frame, draw_frame, lower, upper, color):
     mask = cv2.inRange(new_hsv, lower, upper) 
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
+    location = None
     for c in contours:
         area = cv2.contourArea(c) # check area
         if area < 30: 
